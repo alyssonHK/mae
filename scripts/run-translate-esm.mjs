@@ -1,0 +1,38 @@
+// ESM test runner que utiliza createRequire para carregar handler CommonJS
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const path = require('path');
+const handler = require(path.resolve('api/translate.js'));
+
+async function run() {
+  const req = {
+    method: 'POST',
+    body: { q: 'Hello, how are you?', source: 'en', target: 'pt' },
+  };
+
+  let statusCode = 200;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(obj) {
+      console.log('--- RESPONSE ---');
+      console.log('status:', statusCode);
+      console.log(JSON.stringify(obj, null, 2));
+      return Promise.resolve();
+    },
+    end() {
+      return Promise.resolve();
+    }
+  };
+
+  try {
+    await handler(req, res);
+  } catch (err) {
+    console.error('handler threw:', err);
+    process.exitCode = 2;
+  }
+}
+
+run();
