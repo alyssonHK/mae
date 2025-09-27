@@ -553,19 +553,21 @@ export function mapAfroditeRecipe(recipe: AfroditeRecipeSource): RecipeData {
 async function translateText(text: string, target = 'pt'): Promise<string> {
   if (!text) return text;
   // runtime cache para evitar repetir traduções
-  // chave: text + '::' + target
   // @ts-ignore
   if (!(globalThis as any)._translate_cache) (globalThis as any)._translate_cache = new Map<string, string>();
   // @ts-ignore
   const _cache: Map<string, string> = (globalThis as any)._translate_cache;
   const cacheKey = `${text}::${target}`;
   if (_cache.has(cacheKey)) return _cache.get(cacheKey)!;
+
   const configured = (import.meta.env.VITE_TRANSLATE_API_URL as string) || '';
   const apiKey = import.meta.env.VITE_TRANSLATE_API_KEY as string | undefined;
-  const candidates = configured ? [configured, 'https://translate.argosopentech.com/translate', 'https://libretranslate.de/translate'] : ['https://translate.argosopentech.com/translate', 'https://libretranslate.de/translate'];
-  // Adiciona MyMemory como primeira opção (GET) - simples e sem chave para uso leve
-  // formato: https://api.mymemory.translated.net/get?q=TEXT&langpair=en|pt
-  candidates.unshift('mymemory://');
+  // preferir rota local (/api/translate) quando disponível
+  const candidates = configured
+    ? ['/api/translate', configured, 'https://translate.argosopentech.com/translate', 'https://libretranslate.de/translate']
+    : ['/api/translate', 'https://translate.argosopentech.com/translate', 'https://libretranslate.de/translate'];
+  // adicionar MyMemory como fallback leve (GET)
+  candidates.push('mymemory://');
 
   const payload = {
     q: text,
@@ -584,53 +586,55 @@ async function translateText(text: string, target = 'pt'): Promise<string> {
         // @ts-ignore
         const last429 = (globalThis as any)._mymemory_backoff as number;
         if (last429 && Date.now() - last429 < 10_000) {
-          // pular tentativa se recente 429
           continue;
         }
         const q = encodeURIComponent(text);
-        const url = `https://api.mymemory.translated.net/get?q=${q}&langpair=en|pt`;
+        const url = `https://api.mymemory.translated.net/get?q=${q}&langpair=en|${target}`;
         const res = await fetch(url);
         if (!res.ok) {
           if (res.status === 429) {
-            // registre e evite novas tentativas por um curto periodo
             // @ts-ignore
             (globalThis as any)._mymemory_backoff = Date.now();
           }
           continue;
         }
         const data = await res.json();
-        if (data?.responseData?.translatedText) {
-          // guardar no cache
-          // @ts-ignore
-          (globalThis as any)._translate_cache?.set(`${text}::${target}`, data.responseData.translatedText);
-          return data.responseData.translatedText;
+        const translated = data?.responseData?.translatedText;
+        if (translated) {
+          _cache.set(cacheKey, translated);
+          return translated;
         }
-        continue;
       } catch (e) {
         continue;
       }
+      continue;
     }
+
     try {
+      // preparar body dependendo do endpoint
+      const body = apiUrl === '/api/translate' ? JSON.stringify({ q: text, source: 'en', target }) : JSON.stringify(payload);
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify(payload),
+        body,
       });
 
       if (!res.ok) {
-        // tente próximo endpoint
+        if (apiUrl === '/api/translate' && res.status === 429) {
+          // marque para backoff rápido
+          // @ts-ignore
+          (globalThis as any)._mymemory_backoff = Date.now();
+        }
         continue;
       }
 
-      const ct = res.headers.get('content-type') ?? '';
+      const contentType = res.headers.get('content-type') || '';
       let data: any;
-      if (!ct.includes('application/json')) {
-        // resposta não-JSON (provavelmente HTML de erro); tente próximo endpoint
+      if (!contentType.includes('application/json')) {
         const textResp = await res.text();
-        // tentar parse seguro
         try {
           data = JSON.parse(textResp);
         } catch (e) {
@@ -640,24 +644,28 @@ async function translateText(text: string, target = 'pt'): Promise<string> {
         data = await res.json();
       }
 
-  if (!data) continue;
-      if (typeof data.translatedText === 'string') return data.translatedText;
-      if (typeof data.translation === 'string') return data.translation;
-      if (typeof data.translations === 'string') return data.translations;
-      if (Array.isArray(data) && data[0] && Array.isArray(data[0]) && data[0][0]) return data[0].map((p: any) => p[0]).join('');
-      // some hosted providers return { data: { translations: [{ translatedText }] } }
-      if (data.data && Array.isArray(data.data.translations) && data.data.translations[0] && data.data.translations[0].translatedText) {
-        return data.data.translations[0].translatedText;
+      if (!data) continue;
+      let translated: string | undefined;
+      if (typeof data.translatedText === 'string') translated = data.translatedText;
+      else if (typeof data.translation === 'string') translated = data.translation;
+      else if (typeof data.translations === 'string') translated = data.translations;
+      else if (Array.isArray(data) && data[0] && Array.isArray(data[0]) && data[0][0]) translated = data.map((p: any) => p[0]).join('');
+      else if (data.data && Array.isArray(data.data.translations) && data.data.translations[0] && data.data.translations[0].translatedText) {
+        translated = data.data.translations[0].translatedText;
+      } else {
+        const possible = Object.values(data).find((v) => typeof v === 'string');
+        if (typeof possible === 'string') translated = possible;
       }
-      // se achou algum campo de string razoavel, retorne
-      const possible = Object.values(data).find((v) => typeof v === 'string');
-      if (typeof possible === 'string') return possible;
+
+      if (translated) {
+        _cache.set(cacheKey, translated);
+        return translated;
+      }
     } catch (e) {
-      // tente próximo endpoint
-      // eslint-disable-next-line no-continue
       continue;
     }
   }
+
   return text;
 }
 
