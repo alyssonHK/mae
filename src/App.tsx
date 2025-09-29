@@ -123,6 +123,50 @@ const RECIPE_PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-150467490024
 
 let cachedAfroditeRecipes: AfroditeRecipeSource[] | null = null;
 
+const MOTHER_TITLES = [
+  'Jurássica',
+  'Matusalém',
+  'Peça de Museu',
+  'Relíquia Ambulante',
+  'Do tempo do guaraná com rolha',
+  'Edição de Colecionador',
+  'Coroa',
+  'Testemunha da Invenção da Roda',
+  'Sabe-tudo da Wikipédia',
+  'Dinossaura',
+  'PHD em Novela das Oito',
+  'Clássica',
+  'Vintage',
+  'Ex-jovem',
+  'Jovem há mais tempo',
+  'Vivida (e revivida)',
+  'Rainha do Crochê',
+  'Controladora do Controle Remoto',
+  'Fóssil em Formol',
+  'Viu o Mar Vermelho se abrir',
+  'Patrimônio Histórico',
+  'Especialista em Remédio Caseiro',
+  'Do tempo do epa',
+  'Cheia de juventude acumulada',
+  'Sabe mais que o Google',
+  'Direto do Arco-da-Velha',
+  'Arquivo Vivo da Humanidade',
+  'Fonte inesgotável de "no meu tempo..."',
+  'Mestra em tricô nivel Jedi',
+  'Quando nasceu, a Kodak ainda era startup',
+  'Colecionadora de netos (e de boletos)',
+  'Modelo de capa da revista "Sabedoria"',
+  'Pré-Histórica',
+  'Testemunha da primeira pisada do homem... na Terra',
+  'Véia',
+  'Mãe',
+  'Dona Luiza',
+  'Vó',
+  'Tia Luiza',
+  'Bruxa',
+  
+];
+
 function isRecipeErrorMessage(message: string): boolean {
   return message === RECIPE_ERROR_MESSAGE || message.toLowerCase().includes('receita');
 }
@@ -269,6 +313,29 @@ function normalizeCityInput(raw: string): { display: string; query: string } {
       countryCode = COUNTRY_ALIASES[thirdKey] ?? thirdKey;
     }
     countryDisplay = formatCountryDisplay(rawThird);
+  }
+
+  // Heurísticas: tentar recuperar casos com erros de digitação ou fragmentos
+  // Ex: "Anta catarina" -> normaliza para 'ANTA CATARINA' (contém 'CATARINA')
+  //      "Bra II" -> contém 'BRA' e deve mapear para BR
+  try {
+    const secondKeySafe = (secondKey || '').toUpperCase();
+    const thirdKeySafe = (rawThird && normalizeAliasToken(rawThird)) || '';
+    // detectar menção a 'CATARINA' no segundo token
+    if (!stateCode && secondKeySafe.includes('CATARINA')) {
+      stateCode = 'SC';
+      stateDisplay = rawSecond ? formatStateDisplay(rawSecond, stateCode) : stateCode;
+    }
+    // detectar possdivel mencao a Brasil em qualquer token (ex: 'BRA', 'BRASIL', 'BRA II')
+    if (!countryCode) {
+      const anyKey = `${secondKey || ''} ${thirdKeySafe}`.toUpperCase();
+      if (anyKey.includes(' BRA') || anyKey.startsWith('BRA') || anyKey.includes('BRASIL') || anyKey.includes('BRAZIL')) {
+        countryCode = 'BR';
+        countryDisplay = 'Brasil';
+      }
+    }
+  } catch (e) {
+    // falha da heurdica n e3o bloqueia o fluxo
   }
 
   if (!countryCode && stateCode) {
@@ -623,7 +690,34 @@ async function fetchWeather(city: string): Promise<WeatherData> {
     lat: number;
     lon: number;
   };
-  const [geoData] = (await geoResponse.json()) as GeoResponseItem[];
+  const geoArray = (await geoResponse.json()) as GeoResponseItem[];
+  if (!Array.isArray(geoArray) || geoArray.length === 0) {
+    throw new Error('Nao encontramos essa cidade no OpenWeather');
+  }
+
+  // Tentar escolher o candidato que mais se aproxima da intenção do usuário
+  // Extraia possíveis state/country da query normalizada (ex: "Joinville, SC, BR")
+  const queryParts = normalized.query.split(',').map((s) => s.trim()).filter(Boolean);
+  const desiredState = queryParts.length >= 2 ? normalizeAliasToken(queryParts[1]) : undefined;
+  const desiredCountry = queryParts.length >= 3 ? normalizeAliasToken(queryParts[2]) : undefined;
+
+  let geoData: GeoResponseItem | undefined;
+  if (desiredCountry) {
+    geoData = geoArray.find((g) => (g.country ?? '').toUpperCase() === desiredCountry.toUpperCase());
+  }
+  if (!geoData && desiredState) {
+    geoData = geoArray.find((g) => {
+      const gs = (g.state ?? '').toUpperCase();
+      return gs.includes((desiredState ?? '').toUpperCase());
+    });
+  }
+  // fallback: prefer BR if present
+  if (!geoData) {
+    geoData = geoArray.find((g) => (g.country ?? '').toUpperCase() === 'BR');
+  }
+  // último recurso: primeiro retorno
+  if (!geoData) geoData = geoArray[0];
+
   if (!geoData || typeof geoData.lat !== 'number' || typeof geoData.lon !== 'number') {
     throw new Error('Nao encontramos essa cidade no OpenWeather');
   }
@@ -800,6 +894,10 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 
 const App = () => {
+  const randomMotherTitle = useMemo(() => {
+    const idx = Math.floor(Math.random() * MOTHER_TITLES.length);
+    return MOTHER_TITLES[idx] ?? 'Mãe';
+  }, []);
   const [city, setCity] = useState(DEFAULT_CITY);
   const [inputCity, setInputCity] = useState(DEFAULT_CITY);
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -815,7 +913,15 @@ const App = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const requestIdRef = useRef(0);
 
-  const openSettings = useCallback(() => setIsSettingsOpen(true), []);
+  const openSettings = useCallback(() => {
+    try {
+      // ao abrir, normalize o valor atual do input para uma forma mais limpa
+      setInputCity((prev) => normalizeCityInput(prev).display);
+    } catch (e) {
+      // se algo falhar, apenas abra o modal com o valor atual
+    }
+    setIsSettingsOpen(true);
+  }, []);
   const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
 
   const toggleRecipeExpanded = useCallback(() => setIsRecipeExpanded((prev) => !prev), []);
@@ -975,9 +1081,9 @@ const App = () => {
       <header className="header">
         <div className="header__text">
           <p className="header__eyebrow">Painel matinal</p>
-          <h1>Bom dia, Mae!</h1>
+          <h1>Bom dia, {randomMotherTitle}!</h1>
           <p className="header__subtitle">
-            Espero que tenha uma otima manha. Te amo!
+            Espero que tenha um ótimo dia. Te amo!
           </p>
         </div>
       </header>
