@@ -141,7 +141,6 @@ const MOTHER_TITLES = [
   'Jovem há mais tempo',
   'Vivida (e revivida)',
   'Rainha do Crochê',
-  'Controladora do Controle Remoto',
   'Fóssil em Formol',
   'Viu o Mar Vermelho se abrir',
   'Patrimônio Histórico',
@@ -154,7 +153,6 @@ const MOTHER_TITLES = [
   'Fonte inesgotável de "no meu tempo..."',
   'Mestra em tricô nivel Jedi',
   'Quando nasceu, a Kodak ainda era startup',
-  'Colecionadora de netos (e de boletos)',
   'Modelo de capa da revista "Sabedoria"',
   'Pré-Histórica',
   'Testemunha da primeira pisada do homem... na Terra',
@@ -164,7 +162,16 @@ const MOTHER_TITLES = [
   'Vó',
   'Tia Luiza',
   'Bruxa',
-  
+  'Contemporânea de Cabral',
+  'Nokia antigo', 
+  'Tem mais rugas que mapa rodoviário', 
+  'Fundadora do INSS', 
+  'Manual de instruções ambulante', 
+  'Aposentada pela Arca de Noé', 
+  'Backup em fita cassete', 
+  'Inoxidável', 
+  'Recebe aposentadoria em réis'
+
 ];
 
 function isRecipeErrorMessage(message: string): boolean {
