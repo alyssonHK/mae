@@ -401,7 +401,7 @@ async function fetchNews(): Promise<NewsItem[]> {
   }
 
   if (!response.ok) {
-    // tentar extrair detalhe do corpo (JSON) se possível
+    // tentar extrair detalhe do corpo (JSON) se possí.vel
     try {
       const errJson = await response.json();
       const msg = errJson?.message || errJson?.error || JSON.stringify(errJson);
