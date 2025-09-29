@@ -376,7 +376,6 @@ function normalizeCityInput(raw: string): { display: string; query: string } {
 }
 
 async function fetchNews(): Promise<NewsItem[]> {
-  // Use serverless proxy /api/news to avoid CORS issues in deployed environments
   const params = new URLSearchParams({
     q: 'brasil',
     language: 'pt',
@@ -386,9 +385,30 @@ async function fetchNews(): Promise<NewsItem[]> {
     domains: 'g1.globo.com,terra.com.br,uol.com.br,folha.uol.com.br,oglobo.globo.com,estadao.com.br',
   });
 
-  const response = await fetch(`/api/news?${params.toString()}`);
+  // Em desenvolvimento Vite serve arquivos em /api/* como estáticos (não executa funções),
+  // o que faz a rota retornar o conteúdo do arquivo JS em vez de JSON (causando o erro de parse).
+  // Logo, quando em DEV, faça a chamada direta ao NewsAPI usando a chave VITE_NEWSAPI_KEY.
+  const isDev = Boolean(import.meta.env && import.meta.env.DEV);
+  let response: Response;
+  if (isDev) {
+    const apiKey = import.meta.env.VITE_NEWSAPI_KEY as string | undefined;
+    if (!apiKey) throw new Error('Configure sua chave do NewsAPI em .env (VITE_NEWSAPI_KEY)');
+    response = await fetch(`https://newsapi.org/v2/everything?${params.toString()}`, {
+      headers: { 'X-Api-Key': apiKey },
+    });
+  } else {
+    response = await fetch(`/api/news?${params.toString()}`);
+  }
+
   if (!response.ok) {
-    throw new Error('Falha ao carregar noticias');
+    // tentar extrair detalhe do corpo (JSON) se possível
+    try {
+      const errJson = await response.json();
+      const msg = errJson?.message || errJson?.error || JSON.stringify(errJson);
+      throw new Error(String(msg) || 'Falha ao carregar noticias');
+    } catch (e) {
+      throw new Error('Falha ao carregar noticias');
+    }
   }
 
   type NewsApiArticle = {
