@@ -550,160 +550,9 @@ export function mapAfroditeRecipe(recipe: AfroditeRecipeSource): RecipeData {
 
 // Tradução: tenta usar VITE_TRANSLATE_API_URL (se configurado) ou fallback para
 // https://libretranslate.de/translate. Se a tradução falhar, retorna o texto original.
-async function translateText(text: string, target = 'pt'): Promise<string> {
-  if (!text) return text;
-  // runtime cache para evitar repetir traduções
-  // @ts-ignore
-  if (!(globalThis as any)._translate_cache) (globalThis as any)._translate_cache = new Map<string, string>();
-  // @ts-ignore
-  const _cache: Map<string, string> = (globalThis as any)._translate_cache;
-  const cacheKey = `${text}::${target}`;
-  if (_cache.has(cacheKey)) return _cache.get(cacheKey)!;
 
-  const configured = (import.meta.env.VITE_TRANSLATE_API_URL as string) || '';
-  const apiKey = import.meta.env.VITE_TRANSLATE_API_KEY as string | undefined;
-  // preferir rota local (/api/translate) quando disponível
-  const candidates = configured
-    ? ['/api/translate', configured, 'https://translate.argosopentech.com/translate', 'https://libretranslate.de/translate']
-    : ['/api/translate', 'https://translate.argosopentech.com/translate', 'https://libretranslate.de/translate'];
-  // adicionar MyMemory como fallback leve (GET)
-  candidates.push('mymemory://');
 
-  const payload = {
-    q: text,
-    source: 'en',
-    target,
-    format: 'text',
-    api_key: apiKey ?? undefined,
-  } as Record<string, unknown>;
 
-  for (const apiUrl of candidates) {
-    if (apiUrl === 'mymemory://') {
-      try {
-        // throttle simples para MyMemory quando ocorrer 429
-        // @ts-ignore
-        if (!(globalThis as any)._mymemory_backoff) (globalThis as any)._mymemory_backoff = 0;
-        // @ts-ignore
-        const last429 = (globalThis as any)._mymemory_backoff as number;
-        if (last429 && Date.now() - last429 < 10_000) {
-          continue;
-        }
-        const q = encodeURIComponent(text);
-        const url = `https://api.mymemory.translated.net/get?q=${q}&langpair=en|${target}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-          if (res.status === 429) {
-            // @ts-ignore
-            (globalThis as any)._mymemory_backoff = Date.now();
-          }
-          continue;
-        }
-        const data = await res.json();
-        const translated = data?.responseData?.translatedText;
-        if (translated) {
-          _cache.set(cacheKey, translated);
-          return translated;
-        }
-      } catch (e) {
-        continue;
-      }
-      continue;
-    }
-
-    try {
-      // preparar body dependendo do endpoint
-      const body = apiUrl === '/api/translate' ? JSON.stringify({ q: text, source: 'en', target }) : JSON.stringify(payload);
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body,
-      });
-
-      if (!res.ok) {
-        if (apiUrl === '/api/translate' && res.status === 429) {
-          // marque para backoff rápido
-          // @ts-ignore
-          (globalThis as any)._mymemory_backoff = Date.now();
-        }
-        continue;
-      }
-
-      const contentType = res.headers.get('content-type') || '';
-      let data: any;
-      if (!contentType.includes('application/json')) {
-        const textResp = await res.text();
-        try {
-          data = JSON.parse(textResp);
-        } catch (e) {
-          continue;
-        }
-      } else {
-        data = await res.json();
-      }
-
-      if (!data) continue;
-      let translated: string | undefined;
-      if (typeof data.translatedText === 'string') translated = data.translatedText;
-      else if (typeof data.translation === 'string') translated = data.translation;
-      else if (typeof data.translations === 'string') translated = data.translations;
-      else if (Array.isArray(data) && data[0] && Array.isArray(data[0]) && data[0][0]) translated = data.map((p: any) => p[0]).join('');
-      else if (data.data && Array.isArray(data.data.translations) && data.data.translations[0] && data.data.translations[0].translatedText) {
-        translated = data.data.translations[0].translatedText;
-      } else {
-        const possible = Object.values(data).find((v) => typeof v === 'string');
-        if (typeof possible === 'string') translated = possible;
-      }
-
-      if (translated) {
-        _cache.set(cacheKey, translated);
-        return translated;
-      }
-    } catch (e) {
-      continue;
-    }
-  }
-
-  return text;
-}
-
-// Helper: small sleep
-function sleep(ms: number) {
-  return new Promise((res) => setTimeout(res, ms));
-}
-
-// Traduz várias strings em batch, reduzindo número de requisições.
-// Junta usando um delimitador improvável, chama translateText uma vez e separa.
-async function translateArray(items: string[], target = 'pt'): Promise<string[]> {
-  if (!items || items.length === 0) return [];
-  const delimiter = '|||~|||';
-  const joined = items.join(delimiter);
-  const translatedJoined = await translateText(joined, target);
-  if (!translatedJoined) return items;
-  const parts = translatedJoined.split(delimiter).map((s) => s.trim());
-  if (parts.length === items.length) return parts;
-  // fallback: tentar traduzir individualmente com cache e pequenas pausas
-  const results: string[] = [];
-  for (const it of items) {
-    try {
-      // pequena pausa para evitar bursts que causem 429
-      await sleep(120);
-      // @ts-ignore
-      const cached = (globalThis as any)._translate_cache?.get(`${it}::${target}`);
-      if (cached) {
-        results.push(cached);
-        continue;
-      }
-      const t = await translateText(it, target);
-      results.push(t);
-    } catch (e) {
-      results.push(it);
-    }
-  }
-  return results;
-}
 
 function mapMealToRecipe(meal: any): RecipeData {
   // Extrai ingredientes/medidas do formato TheMealDB (até 20 pares)
@@ -729,73 +578,25 @@ function mapMealToRecipe(meal: any): RecipeData {
 }
 
 async function fetchRecipe(): Promise<RecipeData> {
-  // Busca uma receita aleatoria no TheMealDB e traduz os campos para pt-BR
-  const response = await fetch('https://www.themealdb.com/api/json/v1/1/random.php');
-  if (!response.ok) {
-    throw new Error('Falha ao carregar receita do TheMealDB');
-  }
-  const data = await response.json();
-  const meal = Array.isArray(data.meals) && data.meals.length > 0 ? data.meals[0] : null;
-  if (!meal) {
-    throw new Error('Nenhuma receita encontrada no TheMealDB');
-  }
-
-  // Mapear sem tradução primeiro
-  const mapped = mapMealToRecipe(meal);
-
-  // Traduza nome, category, origin, instructions e ingredientes (medida+nome)
+  // Use local translated_meals.json (arquivo está em public/) e escolha uma receita aleatória
   try {
-    const [tName, tCategory, tOrigin, tInstructions] = await Promise.all([
-      translateText(mapped.name),
-      mapped.category ? translateText(mapped.category) : Promise.resolve(undefined),
-      mapped.origin ? translateText(mapped.origin) : Promise.resolve(undefined),
-      mapped.instructions ? translateText(mapped.instructions) : Promise.resolve(undefined),
-    ]);
+    const res = await fetch('/translated_meals.json');
+    if (!res.ok) {
+      throw new Error('Falha ao carregar receitas locais');
+    }
+    const data = await res.json();
+    const meals = Array.isArray(data.meals) ? data.meals : [];
+    if (meals.length === 0) throw new Error('Nenhuma receita disponivel no arquivo local');
 
-    // Melhor: separe medida e nome antes de traduzir para preservar medidas.
-    // Ex: "2 tbs Sugar" => measure: "2 tbs", name: "Sugar"
-    const ingredientPairs = mapped.ingredients.map((it) => {
-      const full = `${it.measure ? it.measure + ' ' : ''}${it.name}`.trim();
-      // tenta extrair medida inicial (número + unidade ou abreviação) - heurística simples
-      const m = full.match(/^([\d\/\.]+\s*[a-zA-Z%ººªç\u00C0-\u017F\-\.]*\b(?:\s+of)?)/i);
-      if (m) {
-        const measure = m[1].trim();
-        const name = full.slice(m[1].length).trim() || it.name;
-        return { measure, name };
-      }
-      // se não encontrou medida pelo regex, separe por primeira palavra se for medida curta
-      const maybeParts = full.split(/\s+/);
-      if (maybeParts.length > 1 && /^[\d\/\.]+$/.test(maybeParts[0])) {
-        return { measure: maybeParts[0], name: maybeParts.slice(1).join(' ') };
-      }
-      return { measure: it.measure || '', name: it.name };
-    });
+    const randomIndex = Math.floor(Math.random() * meals.length);
+    const meal = meals[randomIndex];
+    if (!meal) throw new Error('Receita aleatoria invalida');
 
-    // traduzir nomes em batch (menor taxa de erro que traduzir medidas)
-    const namesToTranslate = ingredientPairs.map((p) => p.name);
-    const translatedNames = await translateArray(namesToTranslate);
-
-    // traduzir medidas em batch apenas se existirem e pareçam textuais
-    const measuresToTranslate = ingredientPairs.map((p) => p.measure).map((m) => (m && /[a-zA-Z]/.test(m) ? m : m));
-    const translatedMeasures = await translateArray(measuresToTranslate);
-
-    const finalIngredients = ingredientPairs.map((p, idx) => {
-      const tName = translatedNames[idx] || p.name;
-      const tMeasure = translatedMeasures[idx] || p.measure;
-      return { name: tName, measure: tMeasure, isHeading: false };
-    });
-
-    return {
-      ...mapped,
-      name: tName || mapped.name,
-      category: tCategory || mapped.category,
-      origin: tOrigin || mapped.origin,
-      instructions: tInstructions || mapped.instructions,
-      ingredients: finalIngredients.length > 0 ? finalIngredients : mapped.ingredients,
-    };
-  } catch (err) {
-    // Se tradução falhar, retorne o mapeamento original
+    // Mapear o formato TheMealDB para RecipeData sem tradução
+    const mapped = mapMealToRecipe(meal);
     return mapped;
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('Erro ao carregar receita');
   }
 }
 
