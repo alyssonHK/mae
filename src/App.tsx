@@ -376,11 +376,7 @@ function normalizeCityInput(raw: string): { display: string; query: string } {
 }
 
 async function fetchNews(): Promise<NewsItem[]> {
-  const apiKey = import.meta.env.VITE_NEWSAPI_KEY;
-  if (!apiKey) {
-    throw new Error('Configure sua chave do NewsAPI em .env');
-  }
-
+  // Use serverless proxy /api/news to avoid CORS issues in deployed environments
   const params = new URLSearchParams({
     q: 'brasil',
     language: 'pt',
@@ -390,12 +386,7 @@ async function fetchNews(): Promise<NewsItem[]> {
     domains: 'g1.globo.com,terra.com.br,uol.com.br,folha.uol.com.br,oglobo.globo.com,estadao.com.br',
   });
 
-  const response = await fetch(`https://newsapi.org/v2/everything?${params.toString()}`, {
-    headers: {
-      'X-Api-Key': apiKey,
-    },
-  });
-
+  const response = await fetch(`/api/news?${params.toString()}`);
   if (!response.ok) {
     throw new Error('Falha ao carregar noticias');
   }
